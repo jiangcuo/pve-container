@@ -25,6 +25,7 @@ sub detect_architecture {
 	0x3e => 'amd64',
 	0x28 => 'armhf',
 	0xb7 => 'arm64',
+	0x2 => 'loongarch64',
     };
 
     my $elf_fn = '/bin/sh'; # '/bin/sh' is POSIX mandatory
