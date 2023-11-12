@@ -27,6 +27,7 @@ sub detect_architecture {
 	0x28 => 'armhf',
 	0xb7 => 'arm64',
 	0xf3 => 'riscv',
+	0x2 => 'loongarch64',
     };
 
     my $elf_fn = '/bin/sh'; # '/bin/sh' is POSIX mandatory
@@ -48,6 +49,7 @@ sub detect_architecture {
 	    if (!defined($class) || !defined($magic) || $magic ne "\177ELF");
 
 	my $arch = $supported_elf_machine->{$machine};
+
 	die "'$elf_fn' has unknown ELF machine '$machine'!\n"
 	    if !defined($arch);
 
