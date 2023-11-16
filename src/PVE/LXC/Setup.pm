@@ -322,6 +322,8 @@ sub pre_start_hook {
 	$host_arch = 'arm64';
     } elsif ($host_arch eq 'loongarch64'){
 	$host_arch = 'loongarch64';
+    } elsif ($host_arch eq 'riscv64'){
+	$host_arch = 'riscv64';
     } else {
 	die "unsupported host architecture '$host_arch'\n";
     }

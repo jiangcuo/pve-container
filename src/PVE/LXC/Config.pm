@@ -438,9 +438,9 @@ my $confdesc = {
     arch => {
 	optional => 1,
 	type => 'string',
-	enum => ['amd64', 'i386', 'arm64', 'armhf', 'loongarch64'],
+	enum => ['amd64', 'i386', 'arm64', 'armhf', 'riscv64'],
 	description => "OS architecture type.",
-	default => 'loongarch64',
+	default => 'riscv64',
     },
     ostype => {
 	optional => 1,
