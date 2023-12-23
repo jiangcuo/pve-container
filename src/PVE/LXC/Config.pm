@@ -22,6 +22,12 @@ use constant {
     FITHAW   => 0xc0045878,
 };
 
+my $have_sdn;
+eval {
+    require PVE::Network::SDN::Vnets;
+    $have_sdn = 1;
+};
+
 my $nodename = PVE::INotify::nodename();
 my $lock_handles =  {};
 my $lockdir = "/run/lock/lxc";
@@ -29,6 +35,7 @@ mkdir $lockdir;
 mkdir "/etc/pve/nodes/$nodename/lxc";
 my $MAX_MOUNT_POINTS = 256;
 my $MAX_UNUSED_DISKS = $MAX_MOUNT_POINTS;
+my $MAX_DEVICES = 256;
 
 # BEGIN implemented abstract methods from PVE::AbstractConfig
 
@@ -908,6 +915,63 @@ for (my $i = 0; $i < $MAX_UNUSED_DISKS; $i++) {
     }
 }
 
+PVE::JSONSchema::register_format('pve-lxc-dev-string', \&verify_lxc_dev_string);
+sub verify_lxc_dev_string {
+    my ($dev, $noerr) = @_;
+
+    # do not allow /./ or /../ or /.$ or /..$
+    # enforce /dev/ at the beginning
+
+    if (
+	$dev =~ m@/\.\.?(?:/|$)@ ||
+	$dev !~ m!^/dev/!
+    ) {
+	return undef if $noerr;
+	die "$dev is not a valid device path\n";
+    }
+
+    return $dev;
+}
+
+my $dev_desc = {
+    path => {
+	optional => 1,
+	type => 'string',
+	default_key => 1,
+	format => 'pve-lxc-dev-string',
+	format_description => 'Path',
+	description => 'Device to pass through to the container',
+	verbose_description => 'Path to the device to pass through to the container',
+    },
+    mode => {
+	optional => 1,
+	type => 'string',
+	pattern => '0[0-7]{3}',
+	format_description => 'Octal access mode',
+	description => 'Access mode to be set on the device node',
+    },
+    uid => {
+	optional => 1,
+	type => 'integer',
+	minimum => 0,
+	description => 'User ID to be assigned to the device node',
+    },
+    gid => {
+	optional => 1,
+	type => 'integer',
+	minimum => 0,
+	description => 'Group ID to be assigned to the device node',
+    },
+};
+
+for (my $i = 0; $i < $MAX_DEVICES; $i++) {
+    $confdesc->{"dev$i"} = {
+	optional => 1,
+	type => 'string', format => $dev_desc,
+	description => "Device to pass through to the container",
+    }
+}
+
 sub parse_pct_config {
     my ($filename, $raw, $strict) = @_;
 
@@ -1255,6 +1319,23 @@ sub parse_volume {
     return;
 }
 
+sub parse_device {
+    my ($class, $device_string, $noerr) = @_;
+
+    my $res = eval { PVE::JSONSchema::parse_property_string($dev_desc, $device_string) };
+    if ($@) {
+	return undef if $noerr;
+	die $@;
+    }
+
+    if (!defined($res->{path})) {
+	return undef if $noerr;
+	die "Path has to be defined\n";
+    }
+
+    return $res;
+}
+
 sub print_volume {
     my ($class, $key, $volume) = @_;
 
@@ -1383,6 +1464,12 @@ sub vmconfig_hotplug_pending {
 	    } elsif ($opt =~ m/^net(\d)$/) {
 		my $netid = $1;
 		PVE::Network::veth_delete("veth${vmid}i$netid");
+		if ($have_sdn) {
+		    my $net = PVE::LXC::Config->parse_lxc_network($conf->{$opt});
+		    print "delete ips from $opt\n";
+		    eval { PVE::Network::SDN::Vnets::del_ips_from_mac($net->{bridge}, $net->{hwaddr}, $conf->{hostname}) };
+		    warn $@ if $@;
+		}
 	    } else {
 		die "skip\n"; # skip non-hotpluggable opts
 	    }
@@ -1459,6 +1546,12 @@ sub vmconfig_apply_pending {
 	    } elsif ($opt =~ m/^unused(\d+)$/) {
 		PVE::LXC::delete_mountpoint_volume($storecfg, $vmid, $conf->{$opt})
 		    if !$class->is_volume_in_use($conf, $conf->{$opt}, 1, 1);
+	    } elsif ($opt =~ m/^net(\d+)$/) {
+		if ($have_sdn) {
+		    my $net = $class->parse_lxc_network($conf->{$opt});
+		    eval { PVE::Network::SDN::Vnets::del_ips_from_mac($net->{bridge}, $net->{hwaddr}, $conf->{hostname}) };
+		    warn $@ if $@;
+		}
 	    }
 	};
 	if (my $err = $@) {
@@ -1481,6 +1574,17 @@ sub vmconfig_apply_pending {
 		my $netid = $1;
 		my $net = $class->parse_lxc_network($conf->{pending}->{$opt});
 		$conf->{pending}->{$opt} = $class->print_lxc_network($net);
+		if ($have_sdn) {
+		    if ($conf->{$opt}) {
+			my $old_net = $class->parse_lxc_network($conf->{$opt});
+			if ($old_net->{bridge} ne $net->{bridge} || $old_net->{hwaddr} ne $net->{hwaddr}) {
+			    PVE::Network::SDN::Vnets::del_ips_from_mac($old_net->{bridge}, $old_net->{hwaddr}, $conf->{name});
+			    PVE::Network::SDN::Vnets::add_next_free_cidr($net->{bridge}, $conf->{hostname}, $net->{hwaddr}, $vmid, undef, 1);
+			}
+		    } else {
+			PVE::Network::SDN::Vnets::add_next_free_cidr($net->{bridge}, $conf->{hostname}, $net->{hwaddr}, $vmid, undef, 1);
+		    }
+		}
 	    }
 	};
 	if (my $err = $@) {
@@ -1759,6 +1863,18 @@ sub get_derived_property {
 	return ($conf->{memory} || 512) * 1024 * 1024;
     } else {
 	die "unknown derived property - $name\n";
+    }
+}
+
+sub foreach_passthrough_device {
+    my ($class, $conf, $func, @param) = @_;
+
+    for my $key (keys %$conf) {
+	next if $key !~ m/^dev(\d+)$/;
+
+	my $device = $class->parse_device($conf->{$key});
+
+	$func->($key, $device, @param);
     }
 }
 

@@ -4,8 +4,8 @@ use strict;
 use warnings;
 
 use Cwd qw();
-use Errno qw(ELOOP ENOTDIR EROFS ECONNREFUSED EEXIST);
-use Fcntl qw(O_RDONLY O_WRONLY O_NOFOLLOW O_DIRECTORY);
+use Errno qw(ELOOP ENOENT ENOTDIR EROFS ECONNREFUSED EEXIST);
+use Fcntl qw(O_RDONLY O_WRONLY O_NOFOLLOW O_DIRECTORY :mode);
 use File::Path;
 use File::Spec;
 use IO::Poll qw(POLLIN POLLHUP);
@@ -46,6 +46,7 @@ use PVE::LXC::Tools;
 my $have_sdn;
 eval {
     require PVE::Network::SDN::Zones;
+    require PVE::Network::SDN::Vnets;
     $have_sdn = 1;
 };
 
@@ -639,6 +640,29 @@ sub update_lxc_config {
 	$raw .= "lxc.mount.auto = sys:mixed\n";
     }
 
+    PVE::LXC::Config->foreach_passthrough_device($conf, sub {
+	my ($key, $device) = @_;
+
+	die "Path is not defined for passthrough device $key"
+	    unless (defined($device->{path}));
+
+	my $absolute_path = $device->{path};
+	my ($mode, $rdev) = (stat($absolute_path))[2, 6];
+
+	die "Device $absolute_path does not exist\n" if $! == ENOENT;
+
+	die "Error accessing device $absolute_path\n"
+	    if (!defined($mode) || !defined($rdev));
+
+	die "$absolute_path is not a device\n"
+	    if (!S_ISBLK($mode) && !S_ISCHR($mode));
+
+	my $major = PVE::Tools::dev_t_major($rdev);
+	my $minor = PVE::Tools::dev_t_minor($rdev);
+	my $device_type_char = S_ISBLK($mode) ? 'b' : 'c';
+	$raw .= "lxc.cgroup2.devices.allow = $device_type_char $major:$minor rw\n";
+    });
+
     # WARNING: DO NOT REMOVE this without making sure that loop device nodes
     # cannot be exposed to the container with r/w access (cgroup perms).
     # When this is enabled mounts will still remain in the monitor's namespace
@@ -898,6 +922,8 @@ sub destroy_lxc_container {
 	});
     }
 
+    delete_ifaces_ipams_ips($conf, $vmid);
+
     rmdir "/var/lib/lxc/$vmid/rootfs";
     unlink "/var/lib/lxc/$vmid/config";
     rmdir "/var/lib/lxc/$vmid";
@@ -961,27 +987,47 @@ sub update_net {
 	    safe_string_ne($oldnet->{name}, $newnet->{name})) {
 
 	    PVE::Network::veth_delete($veth);
+
+	    if ($have_sdn && safe_string_ne($oldnet->{hwaddr}, $newnet->{hwaddr})) {
+		eval { PVE::Network::SDN::Vnets::del_ips_from_mac($oldnet->{bridge}, $oldnet->{hwaddr}, $conf->{hostname}) };
+		warn $@ if $@;
+
+		PVE::Network::SDN::Vnets::add_next_free_cidr($newnet->{bridge}, $conf->{hostname}, $newnet->{hwaddr}, $vmid, undef, 1);
+		PVE::Network::SDN::Vnets::add_dhcp_mapping($newnet->{bridge}, $newnet->{hwaddr}, $vmid, $conf->{hostname});
+	    }
+
 	    delete $conf->{$opt};
 	    PVE::LXC::Config->write_config($vmid, $conf);
 
 	    hotplug_net($vmid, $conf, $opt, $newnet, $netid);
 
 	} else {
-	    if (safe_string_ne($oldnet->{bridge}, $newnet->{bridge}) ||
+	    my $bridge_changed = safe_string_ne($oldnet->{bridge}, $newnet->{bridge});
+
+	    if ($bridge_changed ||
 		safe_num_ne($oldnet->{tag}, $newnet->{tag}) ||
 		safe_num_ne($oldnet->{firewall}, $newnet->{firewall}) ||
 		safe_boolean_ne($oldnet->{link_down}, $newnet->{link_down})
 	    ) {
-
 		if ($oldnet->{bridge}) {
+		    my $oldbridge = $oldnet->{bridge};
+
 		    PVE::Network::tap_unplug($veth);
 		    foreach (qw(bridge tag firewall)) {
 			delete $oldnet->{$_};
 		    }
 		    $conf->{$opt} = PVE::LXC::Config->print_lxc_network($oldnet);
 		    PVE::LXC::Config->write_config($vmid, $conf);
+
+		    if ($have_sdn && $bridge_changed) {
+			eval { PVE::Network::SDN::Vnets::del_ips_from_mac($oldbridge, $oldnet->{hwaddr}, $conf->{hostname}) };
+			warn $@ if $@;
+		    }
 		}
 
+		if ($have_sdn && $bridge_changed) {
+		    PVE::Network::SDN::Vnets::add_next_free_cidr($newnet->{bridge}, $conf->{hostname}, $newnet->{hwaddr}, $vmid, undef, 1);
+		}
 		PVE::LXC::net_tap_plug($veth, $newnet);
 
 		# This includes the rate:
@@ -998,6 +1044,11 @@ sub update_net {
 	    PVE::LXC::Config->write_config($vmid, $conf);
 	}
     } else {
+	if ($have_sdn) {
+	    PVE::Network::SDN::Vnets::add_next_free_cidr($newnet->{bridge}, $conf->{hostname}, $newnet->{hwaddr}, $vmid, undef, 1);
+	    PVE::Network::SDN::Vnets::add_dhcp_mapping($newnet->{bridge}, $newnet->{hwaddr}, $vmid, $conf->{hostname});
+	}
+
 	hotplug_net($vmid, $conf, $opt, $newnet, $netid);
     }
 
@@ -1034,6 +1085,32 @@ sub hotplug_net {
     $conf->{$opt} = PVE::LXC::Config->print_lxc_network($done);
 
     PVE::LXC::Config->write_config($vmid, $conf);
+}
+
+sub get_interfaces {
+    my ($vmid) = @_;
+
+    my $pid = eval { find_lxc_pid($vmid); };
+    return if $@;
+
+    my $output;
+    # enters the network namespace of the container and executes 'ip a'
+    run_command(['nsenter', '-t', $pid, '--net', '--', 'ip', '--json', 'a'],
+	outfunc => sub { $output .= shift; });
+
+    my $config = JSON::decode_json($output);
+
+    my $res;
+    for my $interface ($config->@*) {
+	my $obj = { name => $interface->{ifname} };
+	for my $ip ($interface->{addr_info}->@*) {
+	    $obj->{$ip->{family}} = $ip->{local} . "/" . $ip->{prefixlen};
+	}
+	$obj->{hwaddr} = $interface->{address};
+	push @$res, $obj
+    }
+
+    return $res;
 }
 
 sub update_ipconfig {
@@ -1318,6 +1395,8 @@ sub check_ct_modify_config_perm {
 	    $rpcenv->check_vm_perm($authuser, $vmid, $pool, ['VM.Config.Network']);
 	    check_bridge_access($rpcenv, $authuser, $oldconf->{$opt}) if $oldconf->{$opt};
 	    check_bridge_access($rpcenv, $authuser, $newconf->{$opt}) if $newconf->{$opt};
+	} elsif ($opt =~ m/^dev\d+$/) {
+	    raise_perm_exc("configuring device passthrough is only allowed for root\@pam");
 	} elsif ($opt eq 'nameserver' || $opt eq 'searchdomain' || $opt eq 'hostname') {
 	    $rpcenv->check_vm_perm($authuser, $vmid, $pool, ['VM.Config.Network']);
 	} elsif ($opt eq 'features') {
@@ -2367,6 +2446,34 @@ sub validate_id_maps {
     }
 }
 
+sub map_ct_id_to_host {
+    my ($id, $id_map, $id_type) = @_;
+
+    for my $mapping (@$id_map) {
+	my ($type, $ct, $host, $length) = @$mapping;
+
+	next if ($type ne $id_type);
+
+	if ($id >= $ct && $id < ($ct + $length)) {
+	    return $host - $ct + $id;
+	}
+    }
+
+    return $id;
+}
+
+sub map_ct_uid_to_host {
+    my ($uid, $id_map) = @_;
+
+    return map_ct_id_to_host($uid, $id_map, 'u');
+}
+
+sub map_ct_gid_to_host {
+    my ($gid, $id_map) = @_;
+
+    return map_ct_id_to_host($gid, $id_map, 'g');
+}
+
 sub userns_command {
     my ($id_map) = @_;
     if (@$id_map) {
@@ -2709,6 +2816,32 @@ sub thaw($) {
 	PVE::LXC::Command::unfreeze($vmid, 30);
     } else {
 	PVE::LXC::CGroup->new($vmid)->freeze_thaw(0);
+    }
+}
+
+sub create_ifaces_ipams_ips {
+    my ($conf, $vmid) = @_;
+
+    return if !$have_sdn;
+
+    for my $opt (keys %$conf) {
+	next if $opt !~ m/^net(\d+)$/;
+	my $net = PVE::LXC::Config->parse_lxc_network($conf->{$opt});
+	next if $net->{type} ne 'veth';
+	PVE::Network::SDN::Vnets::add_next_free_cidr($net->{bridge}, $conf->{hostname}, $net->{hwaddr}, $vmid, undef, 1);
+    }
+}
+
+sub delete_ifaces_ipams_ips {
+    my ($conf, $vmid) = @_;
+
+    return if !$have_sdn;
+
+    for my $opt (keys %$conf) {
+	next if $opt !~ m/^net(\d+)$/;
+	my $net = PVE::LXC::Config->parse_lxc_network($conf->{$opt});
+	eval { PVE::Network::SDN::Vnets::del_ips_from_mac($net->{bridge}, $net->{hwaddr}, $conf->{hostname}) };
+	warn $@ if $@;
     }
 }
 
