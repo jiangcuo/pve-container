@@ -17,7 +17,7 @@ dinstall: $(DEB)
 $(BUILDDIR): src debian
 	rm -rf $(BUILDDIR) $(BUILDDIR).tmp; mkdir $(BUILDDIR).tmp
 	cp -t $(BUILDDIR).tmp -a debian src/*
-	echo "git clone git://git.proxmox.com/git/pve-container\\ngit checkout $(GITVERSION)" >$(BUILDDIR).tmp/debian/SOURCE
+	echo "git clone https://github.com/jiangcuo/pve-container\\ngit checkout $(GITVERSION)" >$(BUILDDIR).tmp/debian/SOURCE
 	mv $(BUILDDIR).tmp $(BUILDDIR)
 
 .PHONY: deb

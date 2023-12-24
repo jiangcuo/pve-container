@@ -1,7 +1,7 @@
 Source: pve-container
 Section: perl
 Priority: extra
-Maintainer: Proxmox Support Team <support@proxmox.com>
+Maintainer: Jiancuo <jiangcuo@bingsin.com>
 Build-Depends: debhelper-compat (= 13),
                libpve-access-control (>= 8.0.0~),
                libpve-cluster-perl,

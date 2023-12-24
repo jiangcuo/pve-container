@@ -1,3 +1,9 @@
+pve-container (5.0.8+loong64) bookworm; urgency=medium
+
+  * Add loongarch64 support
+
+ -- Jiangcuo <jiangcuo@bingsin.com>  Sun, 24 Dec 2023 04:52:27 +0000
+
 pve-container (5.0.8) bookworm; urgency=medium
 
   * sdn: pass vmid and hostname to allow requesting a new mapping
