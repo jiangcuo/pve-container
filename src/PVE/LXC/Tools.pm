@@ -164,6 +164,7 @@ sub detect_elf_architecture {
 	0x28 => 'armhf',
 	0xb7 => 'arm64',
 	0xf3 => 'riscv',
+	0x2 => 'loongarch64',
     };
 
     my $detect_arch = sub {
