@@ -1,3 +1,9 @@
+pve-container (5.0.9+loong64) bookworm; urgency=medium
+
+  * Add loongarch64 architecture check.
+
+ -- Jiangcuo <jiangcuo@bingsin.com>  Thu, 28 Dec 2023 20:02:18 +0800
+
 pve-container (5.0.8+loong64) bookworm; urgency=medium
 
   * Add loongarch64 support

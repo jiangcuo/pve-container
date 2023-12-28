@@ -134,18 +134,6 @@ sub new {
     # if arch is unset, we try to autodetect it
     if (!defined($conf->{arch})) {
 	my $arch = eval { $self->protected_call(sub { $plugin->detect_architecture() }) };
-
-	if (my $err = $@) {
-	    warn "Architecture detection failed: $err" if $err;
-	}
-
-	if (!defined($arch)) {
-	    $arch = 'amd64';
-	    print "Falling back to $arch.\nUse `pct set VMID --arch ARCH` to change.\n";
-	} else {
-	    print "Detected container architecture: $arch\n";
-	}
-
 	$conf->{arch} = $arch;
     }
 
