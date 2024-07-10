@@ -12,6 +12,7 @@ use PVE::LXC::Setup::Debian;
 use base qw(PVE::LXC::Setup::Debian);
 
 my $known_versions = {
+    '24.04' => 1, # noble
     '23.10' => 1, # mantic
     '23.04' => 1, # lunar
     '22.10' => 1, # kinetic
@@ -72,7 +73,9 @@ sub template_fixup {
 			  '/etc/systemd/system/multi-user.target.wants/systemd-networkd.service');
 	$self->ct_symlink('/lib/systemd/system/systemd-networkd.socket',
 			  '/etc/systemd/system/socket.target.wants/systemd-networkd.socket');
+    }
 
+    if ($version >= '17.10') {
 	# unlink default netplan lxc config
 	$self->ct_unlink('/etc/netplan/10-lxc.yaml');
     }

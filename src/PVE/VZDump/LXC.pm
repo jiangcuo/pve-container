@@ -52,13 +52,15 @@ my $rsync_vm = sub {
     }
 
     my $transferred = '';
-    my $logfunc = sub {
+    my $outfunc = sub {
 	return if $_[0] !~ /^Total transferred file size: (.+)$/;
 	$transferred = $1;
     };
 
+    my $errfunc = sub { $self->logerr($_[0]); };
+
     my $starttime = time();
-    PVE::Tools::run_command([@$rsync, $to], logfunc => $logfunc);
+    PVE::Tools::run_command([@$rsync, $to], outfunc => $outfunc, errfunc => $errfunc);
     my $delay = time () - $starttime;
 
     $self->loginfo ("$text sync finished - transferred $transferred in ${delay}s");
@@ -120,10 +122,10 @@ sub prepare {
 
     $task->{hostname} = $conf->{'hostname'} || "CT$vmid";
 
-    my ($id_map, $rootuid, $rootgid) = PVE::LXC::parse_id_maps($conf);
+    my ($id_map, $root_uid, $root_gid) = PVE::LXC::parse_id_maps($conf);
     $task->{userns_cmd} = PVE::LXC::userns_command($id_map);
-    $task->{rootuid} = $rootuid;
-    $task->{rootgid} = $rootgid;
+    $task->{root_uid} = $root_uid;
+    $task->{root_gid} = $root_gid;
 
     my $volids = $task->{volids} = [];
 
@@ -241,7 +243,7 @@ sub snapshot {
     PVE::Storage::activate_volumes($storage_cfg, $volids, 'vzdump');
     foreach my $disk (@$disks) {
 	$disk->{dir} = "${rootdir}$disk->{mp}";
-	PVE::LXC::mountpoint_mount($disk, $rootdir, $storage_cfg, 'vzdump', $task->{rootuid}, $task->{rootgid});
+	PVE::LXC::mountpoint_mount($disk, $rootdir, $storage_cfg, 'vzdump', $task->{root_uid}, $task->{root_gid});
     }
 
     $task->{snapdir} = $rootdir;
@@ -346,7 +348,7 @@ sub archive {
 	my $rootdir = $default_mount_point;
 	foreach my $disk (@$disks) {
 	    $disk->{dir} = "${rootdir}$disk->{mp}";
-	    PVE::LXC::mountpoint_mount($disk, $rootdir, $storage_cfg, undef, $task->{rootuid}, $task->{rootgid});
+	    PVE::LXC::mountpoint_mount($disk, $rootdir, $storage_cfg, undef, $task->{root_uid}, $task->{root_gid});
 	    # add every enabled mountpoint (since we use --one-file-system)
 	    # mp already starts with a / so we only need to add the dot
 	    push @sources, ".$disk->{mp}";
@@ -394,6 +396,8 @@ sub archive {
 	push @$param, '--backup-type', 'ct';
 	push @$param, '--backup-id', $vmid;
 	push @$param, '--backup-time', $task->{backup_time};
+	push @$param, '--change-detection-mode', $opts->{"pbs-change-detection-mode"}
+	    if $opts->{"pbs-change-detection-mode"};
 
 	if (my $entries_max = $opts->{"performance"}->{"pbs-entries-max"}) {
 	    push $param->@*, '--entries-max', $entries_max;

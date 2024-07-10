@@ -3,6 +3,7 @@ package PVE::API2::LXC;
 use strict;
 use warnings;
 
+use IO::Socket::UNIX;
 use Socket qw(SOCK_STREAM);
 
 use PVE::SafeSyslog;
@@ -519,9 +520,6 @@ __PACKAGE__->register_method({
 		die "$emsg $err";
 	    }
 	    PVE::AccessControl::add_vm_to_pool($vmid, $pool) if $pool;
-
-	    PVE::API2::LXC::Status->vm_start({ vmid => $vmid, node => $node })
-		if $start_after_create;
 	};
 
 	my $workername = $restore ? 'vzrestore' : 'vzcreate';
@@ -535,6 +533,8 @@ __PACKAGE__->register_method({
 		    PVE::LXC::Config->remove_lock($vmid, 'create');
 		}
 		die $err;
+	    } elsif ($start_after_create) {
+		PVE::API2::LXC::Status->vm_start({ vmid => $vmid, node => $node });
 	    }
 	};
 
@@ -589,6 +589,7 @@ __PACKAGE__->register_method({
 	    { subdir => 'firewall' },
 	    { subdir => 'snapshot' },
 	    { subdir => 'resize' },
+	    { subdir => 'interfaces' }
 	    ];
 
 	return $res;
@@ -2948,8 +2949,12 @@ __PACKAGE__->register_method({
 		} elsif (my $handler = $cmd_handlers->{$cmd}) {
 		    print "received command '$cmd'\n";
 		    eval {
-			if ($cmd_desc->{$cmd}) {
-			    PVE::JSONSchema::validate($parsed, $cmd_desc->{$cmd});
+			if (my $props = $cmd_desc->{$cmd}) {
+			    my $schema = {
+				type => 'object',
+				properties => $props,
+			    };
+			    PVE::JSONSchema::validate($parsed, $schema);
 			} else {
 			    $parsed = {};
 			}

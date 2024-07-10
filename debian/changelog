@@ -1,3 +1,64 @@
+pve-container (5.1.11) bookworm; urgency=medium
+
+  * remote migration: enable schema validation
+
+  * vzdump: conditionally set PBS change detection mode option
+
+ -- Proxmox Support Team <support@proxmox.com>  Mon, 10 Jun 2024 13:58:17 +0200
+
+pve-container (5.1.10) bookworm; urgency=medium
+
+  * fix #5414: use proper percentages in `pct df`
+
+  * setup: support Ubuntu 24.04 Noble
+
+  * setup: unlink default netplan configuration even with Ubuntu >= 23.04
+
+ -- Proxmox Support Team <support@proxmox.com>  Thu, 02 May 2024 14:37:10 +0200
+
+pve-container (5.0.11) bookworm; urgency=medium
+
+  * api: fix regression with locking and start-after-create
+
+ -- Proxmox Support Team <support@proxmox.com>  Wed, 24 Apr 2024 14:28:00 +0200
+
+pve-container (5.0.10) bookworm; urgency=medium
+
+  * api: status: move config locking from API handler into the task worker to
+    avoid potentially blocking the API daemon
+
+  * fix #5160: fix move-mount regression for mount point hotplug
+
+  * api: container index: fix return type of vmid to ensure its an integer
+
+  * pct: fsck: also clean-up (unmap) any mounted volume when the fsck command
+    failed
+
+  * ensure that device passthrough changes do not get written to the config
+    even though they fail basic validation like if the device exists
+
+  * fix #4474: api: add overrule-shutdown parameter to stop endpoint
+
+  * fix #4846: avoid setting the deprecated noacl mount option on ext4
+
+  * firewall: add handling for new nftables based firewall implementation,
+  which currently is a opt-in drop-in replacement for the older iptables-
+  based one.
+
+ -- Proxmox Support Team <support@proxmox.com>  Fri, 19 Apr 2024 20:33:01 +0200
+
+pve-container (5.0.9) bookworm; urgency=medium
+
+  * config: schema: remove duplicate attribute assignment for mpX
+
+  * fix #5194: pct: delete environment variables set by pve
+
+  * pct: drop completion helper for target storage on remote-migration
+
+  * pct: add keep-env option to the 'enter' and 'exec' command
+
+ -- Proxmox Support Team <support@proxmox.com>  Fri, 15 Mar 2024 10:24:22 +0100
+
 pve-container (5.0.9+loong64) bookworm; urgency=medium
 
   * Add loongarch64 architecture check.

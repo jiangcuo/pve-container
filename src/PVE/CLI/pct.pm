@@ -287,6 +287,7 @@ __PACKAGE__->register_method ({
 		die "unable to run fsck for '$volid' (format == $format)\n"
 		    if $format ne 'raw';
 
+		PVE::Storage::activate_volumes($storage_cfg, [$volid]);
 		$path = PVE::Storage::map_volume($storage_cfg, $volid);
 
 	    } else {
@@ -299,9 +300,17 @@ __PACKAGE__->register_method ({
 	    }
 
 	    push(@$command, $path);
-	    PVE::Tools::run_command($command);
+	    eval { PVE::Tools::run_command($command); };
+	    my $err = $@;
 
-	    PVE::Storage::unmap_volume($storage_cfg, $volid) if $storage_id;
+	    if ($storage_id) {
+		eval { PVE::Storage::unmap_volume($storage_cfg, $volid); };
+		warn $@ if $@;
+		eval { PVE::Storage::deactivate_volumes($storage_cfg, [$volid]); };
+		warn $@ if $@;
+	    }
+
+	    die $err if $err;
 	};
 
 	PVE::LXC::Config->lock_config($vmid, $do_fsck);
@@ -424,7 +433,7 @@ __PACKAGE__->register_method({
 		    my $used = $format->($df->{used});
 		    my $avail = $format->($df->{avail});
 
-		    my $pc = sprintf('%.1f', $df->{used}/$df->{total});
+		    my $pc = sprintf('%.1f', 100 * $df->{used} / $df->{total});
 
 		    my $entry = [ $name, $mp->{volume}, $total, $used, $avail, $pc, $path ];
 		    push @list, $entry;
@@ -857,7 +866,7 @@ __PACKAGE__->register_method({
 	additionalProperties => 0,
 	properties => {
 	    node => get_standard_option('pve-node'),
-	    vmid => get_standard_option('pve-vmid', { completion => \&PVE::QemuServer::complete_vmid }),
+	    vmid => get_standard_option('pve-vmid', { completion => \&PVE::LXC::complete_ctid }),
 	    'target-vmid' => get_standard_option('pve-vmid', { optional => 1 }),
 	    'target-endpoint' => get_standard_option('proxmox-remote', {
 		description => "Remote target endpoint",
@@ -885,7 +894,6 @@ __PACKAGE__->register_method({
 		default => 0,
 	    },
 	    'target-storage' => get_standard_option('pve-targetstorage', {
-		completion => \&PVE::QemuServer::complete_migration_storage,
 		optional => 0,
 	    }),
 	    'target-bridge' => {
