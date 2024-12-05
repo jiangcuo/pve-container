@@ -89,8 +89,6 @@ my $autodetect_type = sub {
         return "nixos";
     } elsif (-f "$rootdir/etc/openEuler-release") {
         return "openeuler";
-    } elsif (-f "$rootdir/etc/os-release") {
-        die "unable to detect OS distribution\n";
     } else {
         warn
             "/etc/os-release file not found and autodetection failed, falling back to 'unmanaged'\n";
