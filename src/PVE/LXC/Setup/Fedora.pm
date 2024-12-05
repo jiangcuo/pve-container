@@ -11,7 +11,8 @@ sub new {
     my ($class, $conf, $rootdir, $os_release) = @_;
 
     my $version = $os_release->{VERSION_ID};
-    die "unsupported Fedora release '$version'\n" if !($version >= 22 && $version <= 40);
+    # we cannot really win anything by actively dying on newer versions so only check lower boundary.
+    die "unsupported Fedora release '$version'\n" if !defined($version) || $version < 22;
 
     my $self = { conf => $conf, rootdir => $rootdir, version => $version };
 
@@ -64,4 +65,5 @@ sub setup_network {
     $self->SUPER::setup_network($conf) if $setup_sysconfig;
     $self->SUPER::setup_systemd_networkd($conf) if $setup_systemd;
 }
+
 1;

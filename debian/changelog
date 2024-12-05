@@ -1,3 +1,64 @@
+pve-container (5.2.2) bookworm; urgency=medium
+
+  * network config: avoid committing invalid config on hotplug failure, rather
+    try rolling back to previous config
+
+  * setup: add support Ubuntu 24.10 and future 25.04
+
+  * setup centos & derivatives: hostname: only read sysconfig network if
+    exist. This fixes the support for Fedora 41 images.
+
+ -- Proxmox Support Team <support@proxmox.com>  Tue, 19 Nov 2024 14:02:54 +0100
+
+pve-container (5.2.1) bookworm; urgency=medium
+
+  * api status: add some missing descriptions in return schema
+
+  * fix #5761: add the "discard" mount option
+
+  * fix typos on user-visible strings
+
+  * fix #5762: lxc: setup: support `opensuse-slowroll` as OpenSUSE
+    flavor
+
+  * fix #5742: lxc: setup: centos template keep static ipv6 assignment
+
+  * fix #5720: add setup support for openEuler
+
+  * CentOS: disable some systemd units for sysfs debug mounts that
+    cannot work in containers
+
+ -- Proxmox Support Team <support@proxmox.com>  Fri, 08 Nov 2024 16:00:46 +0100
+
+pve-container (5.2.0) bookworm; urgency=medium
+
+  * fix #5674: add missing 'proxyto' for LXC interfaces API
+
+  * fedora setup: drop checking for to new version, allowing 41 and newer
+    uncoditionally.
+
+  * backup: warn that tar does not honor exclusion pattern with a trailing
+    slash
+
+  * add 'deny-write' option for device passthrough to make said device
+    read-only
+
+  * api: improve CLI auto-completion of the storage parameter for the 'create'
+    and 'move-volume' commands such that it includes a storage only if it has
+    the 'rootdir' container content type enabled.
+
+  * add auto-completion of the storage parameter for the 'clone' command
+
+ -- Proxmox Support Team <support@proxmox.com>  Tue, 10 Sep 2024 16:47:03 +0200
+
+pve-container (5.1.12) bookworm; urgency=medium
+
+  * backup: log errors from rsync
+
+  * d/control: relax versioned dependency for backup client again
+
+ -- Proxmox Support Team <support@proxmox.com>  Tue, 18 Jun 2024 09:16:15 +0200
+
 pve-container (5.1.11) bookworm; urgency=medium
 
   * remote migration: enable schema validation

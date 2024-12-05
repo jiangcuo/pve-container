@@ -121,6 +121,8 @@ sub template_fixup {
     $self->setup_securetty($conf);
 
     $self->remove_lxc_name_from_etc_hosts();
+
+    $self->setup_systemd_disable_static_units();
 }
 
 sub setup_init {
@@ -150,7 +152,7 @@ sub set_hostname {
     my $oldname;
     if ($self->ct_file_exists($hostname_fn)) {
 	$oldname = $self->ct_file_read_firstline($hostname_fn) || 'localhost';
-    } else {
+    } elsif ($self->ct_file_exists($sysconfig_network)) {
 	my $data = $self->ct_file_get_contents($sysconfig_network);
 	if ($data =~ m/^HOSTNAME=\s*(\S+)\s*$/m) {
 	    $oldname = $1;
@@ -228,7 +230,7 @@ sub setup_network {
 	    } elsif ($d->{ip6} eq 'dhcp') {
 		$data .= "DHCPV6C=yes\n";
 	    } else {
-		$data .= "IPV6ADDR=$d->{ip6}\n";
+		$data .= "IPV6ADDR=$d->{ip6}\nIPV6_AUTOCONF=no\n";
 		if (defined($d->{gw6})) {
 		    if (!PVE::Network::is_ip_in_cidr($d->{gw6}, $d->{ip6}, 6) &&
 			!PVE::Network::is_ip_in_cidr($d->{gw6}, 'fe80::/10', 6)

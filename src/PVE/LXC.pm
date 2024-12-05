@@ -139,8 +139,29 @@ our $vmstatus_return_properties = {
 	optional => 1,
 	renderer => 'bytes',
     },
+    disk => {
+	description => "Root disk image space-usage in bytes.",
+	type => 'integer',
+	optional => 1,
+	renderer => 'bytes',
+	minimum => 0,
+    },
     maxdisk => {
-	description => "Root disk size in bytes.",
+	description => "Root disk image size in bytes.",
+	type => 'integer',
+	optional => 1,
+	renderer => 'bytes',
+    },
+    diskread => {
+	description => "The amount of bytes the guest read from it's block devices since the guest"
+	    ." was started. (Note: This info is not available for all storage types.)",
+	type => 'integer',
+	optional => 1,
+	renderer => 'bytes',
+    },
+    diskwrite => {
+	description => "The amount of bytes the guest wrote from it's block devices since the guest"
+	    ." was started. (Note: This info is not available for all storage types.)",
 	type => 'integer',
 	optional => 1,
 	renderer => 'bytes',
@@ -150,8 +171,22 @@ our $vmstatus_return_properties = {
 	type => 'string',
 	optional => 1,
     },
+    netin => {
+	description => "The amount of traffic in bytes that was sent to the guest over the network"
+	    ." since it was started.",
+	type => 'integer',
+	optional => 1,
+	renderer => 'bytes',
+    },
+    netout => {
+	description => "The amount of traffic in bytes that was sent from the guest over the network"
+	    ." since it was started.",
+	type => 'integer',
+	optional => 1,
+	renderer => 'bytes',
+    },
     uptime => {
-	description => "Uptime.",
+	description => "Uptime in seconds.",
 	type => 'integer',
 	optional => 1,
 	renderer => 'duration',
@@ -170,7 +205,13 @@ our $vmstatus_return_properties = {
 	description => "The current configured tags, if any.",
 	type => 'string',
 	optional => 1,
-    }
+    },
+    template => {
+	description => "Determines if the guest is a template.",
+	type => 'boolean',
+	optional => 1,
+	default => 0,
+    },
 };
 
 sub vmstatus {
@@ -651,7 +692,10 @@ sub update_lxc_config {
 	my $major = PVE::Tools::dev_t_major($rdev);
 	my $minor = PVE::Tools::dev_t_minor($rdev);
 	my $device_type_char = S_ISBLK($mode) ? 'b' : 'c';
-	$raw .= "lxc.cgroup2.devices.allow = $device_type_char $major:$minor rw\n";
+	my $allow_perms = $device->{'deny-write'} ? 'r' : 'rw';
+
+	$raw .= "lxc.cgroup2.devices.allow = $device_type_char $major:$minor $allow_perms\n";
+	$raw .= "lxc.cgroup2.devices.deny = $device_type_char $major:$minor w\n" if $device->{'deny-write'};
     });
 
     # WARNING: DO NOT REMOVE this without making sure that loop device nodes
@@ -1007,11 +1051,6 @@ sub update_net {
 		    my $oldbridge = $oldnet->{bridge};
 
 		    PVE::Network::tap_unplug($veth);
-		    foreach (qw(bridge tag firewall)) {
-			delete $oldnet->{$_};
-		    }
-		    $conf->{$opt} = PVE::LXC::Config->print_lxc_network($oldnet);
-		    PVE::LXC::Config->write_config($vmid, $conf);
 
 		    if ($have_sdn && $bridge_changed) {
 			eval { PVE::Network::SDN::Vnets::del_ips_from_mac($oldbridge, $oldnet->{hwaddr}, $conf->{hostname}) };
@@ -1022,7 +1061,12 @@ sub update_net {
 		if ($have_sdn && $bridge_changed) {
 		    PVE::Network::SDN::Vnets::add_next_free_cidr($newnet->{bridge}, $conf->{hostname}, $newnet->{hwaddr}, $vmid, undef, 1);
 		}
-		PVE::LXC::net_tap_plug($veth, $newnet);
+		eval { PVE::LXC::net_tap_plug($veth, $newnet) };
+		if (my $err = $@) {
+		    eval { PVE::LXC::net_tap_plug($veth, $oldnet) };
+		    warn "restoring old network due to hot-plug failure for $veth failed - $@" if $@;
+		    die "$err\n";
+		}
 
 		# This includes the rate:
 		foreach (qw(bridge tag firewall rate link_down)) {
@@ -2380,6 +2424,20 @@ sub complete_ctid_stopped {
 
 sub complete_ctid_running {
     return &$complete_ctid_full(1);
+}
+
+sub complete_storage {
+    my $cfg = PVE::Storage::config();
+    my $ids = $cfg->{ids};
+
+    my $res = [];
+    foreach my $sid (keys %$ids) {
+	next if !PVE::Storage::storage_check_enabled($cfg, $sid, undef, 1);
+	next if !$ids->{$sid}->{content}->{rootdir};
+	push @$res, $sid;
+    }
+
+    return $res;
 }
 
 sub parse_id_maps {

@@ -311,7 +311,7 @@ sub __snapshot_rollback_get_unused {
 cfs_register_file('/lxc/', \&parse_pct_config, \&write_pct_config);
 
 
-my $valid_mount_option_re = qr/(noatime|lazytime|nodev|nosuid|noexec)/;
+my $valid_mount_option_re = qr/(discard|lazytime|noatime|nodev|noexec|nosuid)/;
 
 sub is_valid_mount_option {
     my ($option) = @_;
@@ -607,7 +607,7 @@ my $confdesc = {
 	optional => 1,
 	type => 'string',
 	format => 'pve-volume-id',
-	description => 'Script that will be exectued during various steps in the containers lifetime.',
+	description => 'Script that will be executed during various steps in the containers lifetime.',
     },
     tags => {
 	type => 'string', format => 'pve-tag-list',
@@ -961,6 +961,12 @@ my $dev_desc = {
 	type => 'integer',
 	minimum => 0,
 	description => 'Group ID to be assigned to the device node',
+    },
+    'deny-write' => {
+	optional => 1,
+	type => 'boolean',
+	description => 'Deny the container to write to the device',
+	default => 0,
     },
 };
 
