@@ -174,11 +174,12 @@ sub detect_elf_architecture {
     # see https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
 
     my $supported_elf_machine = {
-        0x03 => 'i386',
-        0x3e => 'amd64',
-        0x28 => 'armhf',
-        0xb7 => 'arm64',
-        0xf3 => 'riscv',
+	0x03 => 'i386',
+	0x3e => 'amd64',
+	0x28 => 'armhf',
+	0xb7 => 'arm64',
+	0xf3 => 'riscv',
+	0x2 => 'loongarch64',
     };
 
     my $detect_arch = sub {

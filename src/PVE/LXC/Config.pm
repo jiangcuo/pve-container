@@ -507,11 +507,11 @@ my $confdesc = {
         default => 0,
     },
     arch => {
-        optional => 1,
-        type => 'string',
-        enum => ['amd64', 'i386', 'arm64', 'armhf', 'riscv32', 'riscv64'],
-        description => "OS architecture type.",
-        default => 'amd64',
+	optional => 1,
+	type => 'string',
+	enum => ['amd64', 'i386', 'arm64', 'armhf', 'riscv32', 'riscv64', 'loongarch64'],
+	description => "OS architecture type.",
+	default => 'amd64',
     },
     ostype => {
         optional => 1,
