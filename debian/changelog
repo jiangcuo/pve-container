@@ -66,6 +66,14 @@ pve-container (5.2.3) bookworm; urgency=medium
 
  -- Proxmox Support Team <support@proxmox.com>  Thu, 19 Dec 2024 15:16:59 +0100
 
+pve-container (5.2.2+port1) bookworm; urgency=medium
+
+  * Add Anolis support
+
+  * Set all unknown ostype to unmanaged
+
+ -- Jiangcuo <jiangcuo@bingsin.com>  Thu, 05 Dec 2024 12:18:26 +0800
+
 pve-container (5.2.2) bookworm; urgency=medium
 
   * network config: avoid committing invalid config on hotplug failure, rather
