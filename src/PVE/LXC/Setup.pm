@@ -10,6 +10,7 @@ use PVE::Tools;
 
 use PVE::LXC::Setup::Alpine;
 use PVE::LXC::Setup::ArchLinux;
+use PVE::LXC::Setup::Anolis;
 use PVE::LXC::Setup::CentOS;
 use PVE::LXC::Setup::Debian;
 use PVE::LXC::Setup::Devuan;
@@ -24,11 +25,12 @@ use PVE::LXC::Setup::Unmanaged;
 my $plugins = {
     alpine => 'PVE::LXC::Setup::Alpine',
     archlinux => 'PVE::LXC::Setup::ArchLinux',
-    centos => 'PVE::LXC::Setup::CentOS',
-    debian => 'PVE::LXC::Setup::Debian',
-    devuan => 'PVE::LXC::Setup::Devuan',
-    fedora => 'PVE::LXC::Setup::Fedora',
-    gentoo => 'PVE::LXC::Setup::Gentoo',
+    anolis    => 'PVE::LXC::Setup::Anolis',
+    centos    => 'PVE::LXC::Setup::CentOS',
+    debian    => 'PVE::LXC::Setup::Debian',
+    devuan    => 'PVE::LXC::Setup::Devuan',
+    fedora    => 'PVE::LXC::Setup::Fedora',
+    gentoo    => 'PVE::LXC::Setup::Gentoo',
     openeuler => 'PVE::LXC::Setup::OpenEuler',
     opensuse => 'PVE::LXC::Setup::SUSE',
     ubuntu => 'PVE::LXC::Setup::Ubuntu',
