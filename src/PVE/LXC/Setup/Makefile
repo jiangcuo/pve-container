@@ -13,6 +13,7 @@ SOURCES=\
     NixOS.pm		\
     OpenEuler.pm	\
     Unmanaged.pm	\
+    Anolis.pm       \
 
 .PHONY: install
 install:
