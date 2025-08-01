@@ -1432,6 +1432,12 @@ sub print_volume {
     return $class->print_ct_mountpoint($volume, $key eq 'rootfs');
 }
 
+sub print_device {
+    my ($class, $info) = @_;
+
+    return PVE::JSONSchema::print_property_string($info, $dev_desc);
+}
+
 sub volid_key {
     my ($class) = @_;
 
@@ -1604,6 +1610,13 @@ sub vmconfig_hotplug_pending {
                 $class->apply_pending_mountpoint($vmid, $conf, $opt, $storecfg, 1);
                 # apply_pending_mountpoint modifies the value if it creates a new disk
                 $value = $conf->{pending}->{$opt};
+            } elsif ($opt =~ m/^dev(\d+)$/) {
+                if (exists($conf->{$opt})) {
+                    die "skip\n"; # don't try to hotplug over existing dev
+                }
+
+                my $dev = $class->parse_device($value);
+                PVE::LXC::device_passthrough_hotplug($vmid, $conf, $dev);
             } else {
                 die "skip\n"; # skip non-hotpluggable
             }

@@ -5,7 +5,8 @@ use warnings;
 
 use Cwd qw();
 use Errno qw(ELOOP ENOTDIR EROFS ECONNREFUSED EEXIST);
-use Fcntl qw(O_RDONLY O_WRONLY O_NOFOLLOW O_DIRECTORY :mode);
+use Fcntl qw(O_RDONLY O_WRONLY O_NOFOLLOW O_DIRECTORY O_CREAT :mode);
+use File::Basename;
 use File::Path;
 use File::Spec;
 use IO::Poll qw(POLLIN POLLHUP);
@@ -227,6 +228,32 @@ our $vmstatus_return_properties = {
         optional => 1,
         default => 0,
     },
+    pressurecpusome => {
+        description => "CPU Some pressure stall average over the last 10 seconds.",
+        type => 'number',
+        optional => 1,
+    },
+    pressureiosome => {
+        description => "IO Some pressure stall average over the last 10 seconds.",
+        type => 'number',
+        optional => 1,
+    },
+    pressureiofull => {
+        description => "IO Full pressure stall average over the last 10 seconds.",
+        type => 'number',
+        optional => 1,
+    },
+    pressurememorysome => {
+        description => "Memory Some pressure stall average over the last 10 seconds.",
+        type => 'number',
+        optional => 1,
+    },
+    pressurememoryfull => {
+        description => "Memory Full pressure stall average over the last 10 seconds.",
+        type => 'number',
+        optional => 1,
+    },
+
 };
 
 sub vmstatus {
@@ -328,6 +355,14 @@ sub vmstatus {
             $d->{diskread} = 0;
             $d->{diskwrite} = 0;
         }
+
+        my $pressures = PVE::ProcFSTools::read_cgroup_pressure("lxc/${vmid}");
+        $d->{pressurecpusome} = $pressures->{cpu}->{some}->{avg10};
+        $d->{pressurecpufull} = $pressures->{cpu}->{full}->{avg10};
+        $d->{pressureiosome} = $pressures->{io}->{some}->{avg10};
+        $d->{pressureiofull} = $pressures->{io}->{full}->{avg10};
+        $d->{pressurememorysome} = $pressures->{memory}->{some}->{avg10};
+        $d->{pressurememoryfull} = $pressures->{memory}->{full}->{avg10};
 
         if (defined(my $cpu = $cgroups->get_cpu_stat())) {
             # Total time (in milliseconds) used up by the cpu.
@@ -534,7 +569,15 @@ sub make_seccomp_config {
             die "'mknod' feature requested, but kernel too old (found $kernel, required >= 5.3)\n";
         }
 
-        $raw_conf .= "lxc.seccomp.notify.proxy = unix:/run/pve/lxc-syscalld.sock\n";
+        # TODO PVE 10 - always use new socket path
+        my $old_socket_path = '/run/pve/lxc-syscalld.sock';
+        my $new_socket_path = '/run/pve-lxc-syscalld/socket';
+
+        if (!-e $new_socket_path && -e $old_socket_path && !-l $old_socket_path) {
+            $raw_conf .= "lxc.seccomp.notify.proxy = unix:$old_socket_path\n";
+        } else {
+            $raw_conf .= "lxc.seccomp.notify.proxy = unix:$new_socket_path\n";
+        }
         $raw_conf .= "lxc.seccomp.notify.cookie = $vmid\n";
 
         $rules->{mknod} = [
@@ -595,6 +638,7 @@ sub make_apparmor_config {
 
     # We use abi/4.0 which has its own mqueue class which governs access to /dev/mqueue now.
     # This is currently not default in lxc's profile, so we enable it explicitly.
+    # FIXME: once lxc's profiles are based on abi/4.0 this should not be required.
     $raw .= "lxc.apparmor.raw = allow mqueue,\n";
 
     my @profile_uses;
@@ -612,6 +656,8 @@ sub make_apparmor_config {
     if ($features->{nesting}) {
         push @profile_uses, 'features:nesting';
         $raw .= "lxc.apparmor.allow_nesting = 1\n";
+        # FIXME: once lxc's profiles are based on abi/4.0 this should not be required.
+        $raw .= "lxc.apparmor.raw = allow userns,\n";
     } else {
         # In the default profile in /etc/apparmor.d we patch this in because
         # otherwise a container can for example run `chown` on /sys, breaking
@@ -1747,6 +1793,32 @@ sub run_with_loopdev {
     return $device;
 }
 
+sub create_passthrough_device_node($$$$$) {
+    my ($passthrough_dir, $device, $mode, $rdev, $id_map) = @_;
+
+    my $passthrough_device_path = $passthrough_dir . $device->{path};
+    File::Path::make_path(dirname($passthrough_device_path));
+    PVE::Tools::mknod($passthrough_device_path, $mode, $rdev)
+        or die("failed to mknod $passthrough_device_path: $!\n");
+
+    # Use chmod because umask could mess with the access mode on mknod
+    my $passthrough_mode = 0660;
+    $passthrough_mode = oct($device->{mode}) if defined($device->{mode});
+    chmod $passthrough_mode, $passthrough_device_path
+        or die "failed to chmod $passthrough_mode $passthrough_device_path: $!\n";
+
+    my $uid = 0;
+    my $gid = 0;
+    $uid = $device->{uid} if defined($device->{uid});
+    $gid = $device->{gid} if defined($device->{gid});
+    $uid = PVE::LXC::map_ct_uid_to_host($uid, $id_map);
+    $gid = PVE::LXC::map_ct_gid_to_host($gid, $id_map);
+    chown $uid, $gid, $passthrough_device_path
+        or die("failed to chown $uid:$gid $passthrough_device_path: $!\n");
+
+    return $passthrough_device_path;
+}
+
 # In scalar mode: returns a file handle to the deepest directory node.
 # In list context: returns a list of:
 #   * the deepest directory node
@@ -2125,15 +2197,124 @@ sub __mountpoint_mount {
     die "unsupported storage";
 }
 
+my $enter_mnt_ns_and_change_aa_profile = sub {
+    my ($mnt_ns, $aa_profile, $code_pre_changeprofile) = @_;
+
+    # Grab a file descriptor to our apparmor label file so we can change the profile
+    sysopen(my $aa_fd, "/proc/self/attr/current", O_WRONLY)
+        or die "failed to open '/proc/self/attr/current' for writing: $!\n";
+
+    # But switch namespaces first, to make sure the namespace switches aren't blocked by
+    # apparmor.
+    PVE::Tools::setns(fileno($mnt_ns), PVE::Tools::CLONE_NEWNS);
+    chdir('/')
+        or die "failed to change root directory within mount namespace: $!\n";
+
+    $code_pre_changeprofile->() if defined($code_pre_changeprofile);
+
+    # Now switch our apparmor profile:
+    my $data = "changeprofile $aa_profile";
+    my $data_written = syswrite($aa_fd, $data, length($data));
+    if (!defined($data_written) || $data_written != length($data)) {
+        die "failed to change apparmor profile: $!\n";
+    }
+    # Check errors on close as well:
+    close($aa_fd)
+        or die "failed to change apparmor profile (close() failed): $!\n";
+};
+
+sub device_passthrough_hotplug : prototype($$$) {
+    my ($vmid, $conf, $dev) = @_;
+
+    my ($mode, $rdev) = PVE::LXC::Tools::get_device_mode_and_rdev($dev->{path});
+    my $device_type = S_ISBLK($mode) ? 'b' : 'c';
+    my $major = PVE::Tools::dev_t_major($rdev);
+    my $minor = PVE::Tools::dev_t_minor($rdev);
+
+    # We do the rest in a fork with an unshared mount namespace:
+    #  -) change our apparmor profile to 'pve-container-mounthotplug', which is '/usr/bin/lxc-start'
+    #     with move_mount privileges on every mount.
+    #  -) create the device node, then grab it, create a file to bind mount the device node onto in
+    #     the container, switch to the container mount namespace, and move_mount the device node.
+
+    PVE::Tools::run_fork(sub {
+        # Pin the container pid longer, we also need to get its monitor/parent:
+        my ($ct_pid, $ct_pidfd) = open_lxc_pid($vmid)
+            or die "failed to open pidfd of container $vmid\'s init process\n";
+
+        my ($monitor_pid, $monitor_pidfd) = open_ppid($ct_pid)
+            or die "failed to open pidfd of container $vmid\'s monitor process\n";
+
+        my $ct_mnt_ns = $get_container_namespace->($vmid, $ct_pid, 'mnt');
+        my $ct_user_ns = $get_container_namespace->($vmid, $ct_pid, 'user');
+        my $monitor_mnt_ns = $get_container_namespace->($vmid, $monitor_pid, 'mnt');
+
+        # Enter monitor mount namespace and switch to 'pve-container-mounthotplug' apparmor profile.
+        $enter_mnt_ns_and_change_aa_profile->(
+            $monitor_mnt_ns, "pve-container-mounthotplug", undef,
+        );
+
+        my $id_map = (PVE::LXC::parse_id_maps($conf))[0];
+        my $passthrough_device_path = create_passthrough_device_node(
+            "/var/lib/lxc/$vmid/passthrough",
+            $dev, $mode, $rdev, $id_map,
+        );
+
+        my $srcfh = PVE::Tools::open_tree(
+            &AT_FDCWD,
+            $passthrough_device_path,
+            &OPEN_TREE_CLOEXEC | &OPEN_TREE_CLONE,
+        ) or die "open_tree() on passthrough device node failed: $!\n";
+
+        if ($conf->{unprivileged}) {
+            PVE::Tools::setns(fileno($ct_user_ns), PVE::Tools::CLONE_NEWUSER)
+                or die "failed to enter user namespace of container $vmid: $!\n";
+
+            POSIX::setuid(0);
+            POSIX::setgid(0);
+        }
+
+        # Create a regular file in the container to bind mount the device node onto.
+        my $device_path = "/proc/$ct_pid/root$dev->{path}";
+        File::Path::make_path(dirname($device_path));
+        sysopen(my $dstfh, $device_path, O_CREAT)
+            or die "failed to create '$device_path': $!\n";
+
+        # Enter the container mount namespace
+        PVE::Tools::setns(fileno($ct_mnt_ns), PVE::Tools::CLONE_NEWNS);
+        chdir('/')
+            or die "failed to change directory within the container's mount namespace: $!\n";
+
+        # Bind mount the device node into the container
+        PVE::Tools::move_mount(
+            fileno($srcfh),
+            '',
+            fileno($dstfh),
+            '',
+            &MOVE_MOUNT_F_EMPTY_PATH | &MOVE_MOUNT_T_EMPTY_PATH,
+        ) or die "move_mount failed: $!\n";
+    });
+
+    # Allow or deny device access with cgroup2
+    run_command(["lxc-cgroup", "-n", $vmid, "devices.deny", "$device_type $major:$minor w"])
+        if ($dev->{'deny-write'});
+
+    my $allow_perms = $dev->{'deny-write'} ? 'r' : 'rw';
+    run_command([
+        "lxc-cgroup", "-n", $vmid, "devices.allow", "$device_type $major:$minor $allow_perms",
+    ]);
+}
+
 sub mountpoint_hotplug : prototype($$$$$) {
     my ($vmid, $conf, $opt, $mp, $storage_cfg) = @_;
 
     my (undef, $root_uid, $root_gid) = PVE::LXC::parse_id_maps($conf);
 
-    # We do the rest in a fork with an unshared mount namespace, because:
-    #  -) change our papparmor profile to that of /usr/bin/lxc-start
-    #  -) we're now going to 'stage' # the mountpoint, then grab it, then move into the
-    #     container's namespace, then mount it.
+    # We do the rest in a fork with an unshared mount namespace:
+    #  -) change our apparmor profile to 'pve-container-mounthotplug', which is '/usr/bin/lxc-start'
+    #     with move_mount privileges on every mount.
+    #  -) we're now going to 'stage' the mountpoint, then grab it, then move into the container's
+    #     namespace, then mount it.
 
     PVE::Tools::run_fork(sub {
         # Pin the container pid longer, we also need to get its monitor/parent:
@@ -2146,32 +2327,20 @@ sub mountpoint_hotplug : prototype($$$$$) {
         my $ct_mnt_ns = $get_container_namespace->($vmid, $ct_pid, 'mnt');
         my $monitor_mnt_ns = $get_container_namespace->($vmid, $monitor_pid, 'mnt');
 
-        # Grab a file descriptor to our apparmor label file so we can change into the 'lxc-start'
-        # profile to lower our privileges to the same level we have in the start hook:
-        sysopen(my $aa_fd, "/proc/self/attr/current", O_WRONLY)
-            or die "failed to open '/proc/self/attr/current' for writing: $!\n";
-        # But switch namespaces first, to make sure the namespace switches aren't blocked by
-        # apparmor.
-
-        # Change into the monitor's mount namespace. We "pin" the mount into the monitor's
-        # namespace for it to remain active there since the container will be able to unmount
-        # hotplugged mount points and thereby potentially free up loop devices, which is a security
-        # concern.
-        PVE::Tools::setns(fileno($monitor_mnt_ns), PVE::Tools::CLONE_NEWNS);
-        chdir('/')
-            or die "failed to change root directory within the monitor's mount namespace: $!\n";
-
-        my $dir = get_staging_mount_path($opt);
-
-        # Now switch our apparmor profile before mounting:
-        my $data = 'changeprofile pve-container-mounthotplug';
-        my $data_written = syswrite($aa_fd, $data, length($data));
-        if (!defined($data_written) || $data_written != length($data)) {
-            die "failed to change apparmor profile: $!\n";
-        }
-        # Check errors on close as well:
-        close($aa_fd)
-            or die "failed to change apparmor profile (close() failed): $!\n";
+        # -) Change into the monitor's mount namespace. We "pin" the mount into the monitor's
+        #    namespace for it to remain active there since the container will be able to unmount
+        #    hotplugged mount points and thereby potentially free up loop devices, which is a
+        #    security concern.
+        # -) Prepare the staging directory.
+        # -) Switch to the 'pve-container-mounthotplug' apparmor profile.
+        my $dir;
+        $enter_mnt_ns_and_change_aa_profile->(
+            $monitor_mnt_ns,
+            "pve-container-mounthotplug",
+            sub {
+                $dir = get_staging_mount_path($opt);
+            },
+        );
 
         my $mount_fd = mountpoint_stage($mp, $dir, $storage_cfg, undef, $root_uid, $root_gid);
 

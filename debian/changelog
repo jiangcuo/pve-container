@@ -1,3 +1,46 @@
+pve-container (6.0.8) trixie; urgency=medium
+
+  * api: introduce migration preconditions api endpoint.
+
+ -- Proxmox Support Team <support@proxmox.com>  Thu, 31 Jul 2025 11:37:55 +0200
+
+pve-container (6.0.7) trixie; urgency=medium
+
+  * metrics: add pressure stall information to status
+
+  * RRD metrics: use new pve-storage-9.0 format RRD file location, if it
+    exists.
+
+ -- Proxmox Support Team <support@proxmox.com>  Thu, 31 Jul 2025 04:46:48 +0200
+
+pve-container (6.0.6) trixie; urgency=medium
+
+  * api: create CT: default to unprivileged containers.
+
+  * create/restore: require Sys.Modify for privileged containers except for
+    in-place restore where both the current and the backed-up config are
+    already privileged.
+
+  * migration: require Sys.Modify for incoming privileged containers.
+
+ -- Proxmox Support Team <support@proxmox.com>  Thu, 31 Jul 2025 01:59:09 +0200
+
+pve-container (6.0.5) trixie; urgency=medium
+
+  * seccomp config: adapt to new lxc-syscalld runtime directory with fallback
+    to previous path.
+
+ -- Proxmox Support Team <support@proxmox.com>  Wed, 30 Jul 2025 13:49:26 +0200
+
+pve-container (6.0.4) trixie; urgency=medium
+
+  * fix #6573: allow userns creation when nesting is enabled
+
+  * implement device hotplug. Note that currently hot-unplug or editing a
+    existing device is not yet supported.
+
+ -- Proxmox Support Team <support@proxmox.com>  Wed, 30 Jul 2025 13:00:51 +0200
+
 pve-container (6.0.3) trixie; urgency=medium
 
   * fix #6538: apparmor: allow mqueue access for apparmor's 4.0 abi.
